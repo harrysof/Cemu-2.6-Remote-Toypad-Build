@@ -1,6 +1,6 @@
 # Cemu 2.6 Remote Toypad Build
 
-A modified Cemu build that adds a local network listener for the LEGO Dimensions Toypad emulation, so figures can be loaded, removed, or moved without using the mouse-driven dialog. Pairs with [ToypadPicker](https://github.com/harrysof/LegoToypad), a standalone controller-driven app for browsing a tag library and sending figures to Cemu.
+A modified Cemu build that adds a local network listener for the LEGO Dimensions Toypad emulation, so figures can be loaded, removed, or moved without using the mouse-driven dialog. Pairs with [LegoToypad](https://github.com/harrysof/LegoToypad), a standalone controller-driven app for browsing a tag library and sending figures to Cemu.
 
 Cemu's existing Toypad dialog is untouched and still works normally. This is an additional interface, not a replacement.
 
@@ -11,12 +11,12 @@ Loading figures through Cemu's file dialog means alt-tabbing to a mouse every ti
 ## How it works
 
 ```
-ToypadPicker  --TCP (127.0.0.1)-->  Cemu listener  -->  g_dimensionstoypad
+LegoToypad  --TCP (127.0.0.1)-->  Cemu listener  -->  g_dimensionstoypad
    (client)                           (server)          (existing Toypad API)
 ```
 
 - Cemu opens a TCP listener on `127.0.0.1` only, once the emulated Toypad is attached.
-- ToypadPicker scans a tag library, lets you pick a figure and slot with a controller, and sends it over the socket.
+- LegoToypad scans a tag library, lets you pick a figure and slot with a controller, and sends it over the socket.
 - Cemu decodes the message and calls the same `LoadFigure` / `RemoveFigure` / `MoveFigure` methods the GUI dialog already uses.
 
 No authentication, no encryption — it's loopback-only by design.
@@ -25,11 +25,11 @@ No authentication, no encryption — it's loopback-only by design.
 
 1. Enable the emulated Dimensions Toypad in Cemu's settings.
 2. Note the listener port (`DimensionsToypadListenerPort`, defaults to `9191`).
-3. Build [ToypadPicker](https://github.com/harrysof/LegoToypad) and drop your tag library in a folder named `Lego Dimensions Organized bins` — it's found automatically by walking up from the executable.
-4. Set the same port in `ToypadPicker.ini`.
-5. Launch Cemu, then ToypadPicker.
+3. download the release [LegoToypad](https://github.com/harrysof/LegoToypad) and drop your tag library in a folder named `Lego Dimensions Organized bins` — it's found automatically by walking up from the executable.
+4. Set the same port in `LegoToypad.ini`.
+5. Launch Cemu, then LegoToypad.
 
-## ToypadPicker
+## LegoToypad
 
 The companion picker app lives in its own repo: **[harrysof/LegoToypad](https://github.com/harrysof/LegoToypad)**.
 
@@ -45,7 +45,7 @@ It's a standalone Win32 app (C++20, XInput + Winsock, no third-party UI libs) th
 
 Keyboard works too — no controller required.
 
-**Controller handoff:** while ToypadPicker has focus, it signals Cemu (via a named event) to neutralize real controller input so gameplay doesn't react to picker navigation. Released immediately on minimize/close/focus loss. Requires the `Controller.cpp` change in *this* repo — a stock Cemu build won't honor the signal.
+**Controller handoff:** while LegoToypad has focus, it signals Cemu (via a named event) to neutralize real controller input so gameplay doesn't react to picker navigation. Released immediately on minimize/close/focus loss. Requires the `Controller.cpp` change in *this* repo — a stock Cemu build won't honor the signal.
 
 **Library:** recursively scans for `.bin` files exactly 180 bytes. Tested against 160 tags across 28 theme folders.
 
@@ -71,7 +71,7 @@ All fields are single bytes — no endianness concerns in v1.
 
 A connection may carry multiple sequential messages; the listener reads exactly the byte count each command requires. Invalid pad/slot/reserved values or unknown commands are logged and the message is dropped, but unknown commands or truncated data close the connection, since the next message boundary can no longer be determined.
 
-**Toypad slot → pad mapping** (as used by ToypadPicker):
+**Toypad slot → pad mapping** (as used by LegoToypad):
 
 | Slot | Pad |
 |---|---|
@@ -93,7 +93,7 @@ A connection may carry multiple sequential messages; the listener reads exactly 
 | `src/config/CemuConfig.h/.cpp` | `DimensionsToypadListenerPort` load/save |
 | `src/Cafe/CMakeLists.txt` | Adds listener sources to build |
 | `src/gui/wxgui/EmulatedUSBDevices/EmulatedUSBDeviceFrame.cpp` | Unmodified — original dialog still works |
-| `src/input/api/Controller.cpp` | Named-event check for ToypadPicker's controller handoff |
+| `src/input/api/Controller.cpp` | Named-event check for LegoToypad's controller handoff |
 
 ## Implementation notes
 
@@ -105,8 +105,8 @@ A connection may carry multiple sequential messages; the listener reads exactly 
 ## Known limitations / not yet verified
 
 - Tag library (160 files) confirmed all 180 bytes; wire layout in `main.cpp` matches spec.
-- No CMake/compiler available in the dev environment used to write this — ToypadPicker has not been compiled or run. End-to-end controller + socket testing still needed on an actual Windows machine.
+- No CMake/compiler available in the dev environment used to write this — LegoToypad has not been compiled or run. End-to-end controller + socket testing still needed on an actual Windows machine.
 
 ## Design notes
 
-ToypadPicker has no dependency on Cemu's source or memory — it only speaks the TCP protocol above. Anyone could write an alternate client against the same contract, and Cemu's stock dialog keeps working regardless of whether the listener or picker are in use.
+LegoToypad has no dependency on Cemu's source or memory — it only speaks the TCP protocol above. Anyone could write an alternate client against the same contract, and Cemu's stock dialog keeps working regardless of whether the listener or picker are in use.
