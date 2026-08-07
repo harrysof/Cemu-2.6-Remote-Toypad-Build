@@ -1,0 +1,178 @@
+#include "DimensionsNetworkListener.h"
+
+#include "Dimensions.h"
+
+namespace nsyshid
+{
+	namespace
+	{
+		constexpr uint8 kLoadCommand = 0x01;
+		constexpr uint8 kRemoveCommand = 0x02;
+		constexpr uint8 kMoveCommand = 0x03;
+		constexpr size_t kHeaderSize = 5;
+		constexpr size_t kFigureDataSize = 0x2D * 0x04;
+	}
+
+	DimensionsNetworkListener::~DimensionsNetworkListener()
+	{
+		Stop();
+	}
+
+	bool DimensionsNetworkListener::Start(uint16 port)
+	{
+		bool expected = false;
+		if (!m_running.compare_exchange_strong(expected, true))
+			return true;
+
+		boost::system::error_code error;
+		m_acceptor = std::make_unique<Tcp::acceptor>(m_ioContext);
+		m_acceptor->open(Tcp::v4(), error);
+		if (!error)
+			m_acceptor->set_option(Tcp::acceptor::reuse_address(true), error);
+		if (!error)
+			m_acceptor->bind(Tcp::endpoint(boost::asio::ip::address_v4::loopback(), port), error);
+		if (!error)
+			m_acceptor->listen(boost::asio::socket_base::max_listen_connections, error);
+
+		if (error)
+		{
+			cemuLog_log(LogType::Force, "Dimensions network listener could not listen on 127.0.0.1:{}: {}", port, error.message());
+			m_acceptor.reset();
+			m_running = false;
+			return false;
+		}
+
+		m_thread = std::thread(&DimensionsNetworkListener::Run, this);
+		cemuLog_logDebug(LogType::Force, "Dimensions network listener started on 127.0.0.1:{}", port);
+		return true;
+	}
+
+	void DimensionsNetworkListener::Stop()
+	{
+		if (!m_running.exchange(false))
+			return;
+
+		boost::system::error_code error;
+		if (m_acceptor)
+			m_acceptor->close(error);
+
+		{
+			std::lock_guard lock(m_socketMutex);
+			if (m_client)
+				m_client->close(error);
+		}
+
+		if (m_thread.joinable())
+			m_thread.join();
+
+		m_acceptor.reset();
+	}
+
+	void DimensionsNetworkListener::Run()
+	{
+		while (m_running)
+		{
+			auto client = std::make_shared<Tcp::socket>(m_ioContext);
+			boost::system::error_code error;
+			m_acceptor->accept(*client, error);
+			if (error)
+			{
+				if (m_running)
+					cemuLog_log(LogType::Force, "Dimensions network listener accept failed: {}", error.message());
+				break;
+			}
+
+			{
+				std::lock_guard lock(m_socketMutex);
+				m_client = client;
+			}
+
+			if (m_running)
+				HandleClient(client);
+
+			client->close(error);
+			{
+				std::lock_guard lock(m_socketMutex);
+				if (m_client == client)
+					m_client.reset();
+			}
+		}
+	}
+
+	void DimensionsNetworkListener::HandleClient(const std::shared_ptr<Tcp::socket>& client)
+	{
+		std::array<uint8, kHeaderSize> header{};
+		while (m_running && ReceiveExact(*client, header))
+		{
+			const uint8 command = header[0];
+			const uint8 pad = header[1];
+			const uint8 index = header[2];
+
+			if (command == kLoadCommand)
+			{
+				std::array<uint8, kFigureDataSize> figureData{};
+				if (!ReceiveExact(*client, figureData))
+				{
+					cemuLog_log(LogType::Force, "Dimensions network listener received a truncated LOAD message");
+					return;
+				}
+
+				if (!IsValidSlot(pad, index) || header[3] != 0 || header[4] != 0)
+				{
+					cemuLog_log(LogType::Force, "Dimensions network listener ignored invalid LOAD message");
+					continue;
+				}
+
+				g_dimensionstoypad.RemoveFigure(pad, index, true);
+				g_dimensionstoypad.LoadFigure(figureData, nullptr, pad, index);
+				continue;
+			}
+
+			if (command == kRemoveCommand)
+			{
+				if (!IsValidSlot(pad, index) || header[3] != 0 || header[4] != 0)
+				{
+					cemuLog_log(LogType::Force, "Dimensions network listener ignored invalid REMOVE message");
+					continue;
+				}
+
+				g_dimensionstoypad.RemoveFigure(pad, index, true);
+				continue;
+			}
+
+			if (command == kMoveCommand)
+			{
+				const uint8 oldPad = header[3];
+				const uint8 oldIndex = header[4];
+				if (!IsValidSlot(pad, index) || !IsValidSlot(oldPad, oldIndex))
+				{
+					cemuLog_log(LogType::Force, "Dimensions network listener ignored invalid MOVE message");
+					continue;
+				}
+
+				g_dimensionstoypad.MoveFigure(pad, index, oldPad, oldIndex);
+				continue;
+			}
+
+			cemuLog_log(LogType::Force, "Dimensions network listener received unknown command {:02x}", command);
+			return;
+		}
+	}
+
+	bool DimensionsNetworkListener::ReceiveExact(Tcp::socket& client, std::span<uint8> buffer)
+	{
+		boost::system::error_code error;
+		boost::asio::read(client, boost::asio::buffer(buffer.data(), buffer.size()), error);
+		if (!error)
+			return true;
+
+		if (m_running && error != boost::asio::error::eof && error != boost::asio::error::operation_aborted)
+			cemuLog_log(LogType::Force, "Dimensions network listener receive failed: {}", error.message());
+		return false;
+	}
+
+	bool DimensionsNetworkListener::IsValidSlot(uint8 pad, uint8 index) const
+	{
+		return pad >= 1 && pad <= 3 && index < 7;
+	}
+} // namespace nsyshid
