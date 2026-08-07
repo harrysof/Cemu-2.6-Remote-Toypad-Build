@@ -1,6 +1,6 @@
 # Cemu 2.6 Remote Toypad Build
 
-A modified Cemu build that adds a local network listener for the LEGO Dimensions Toypad emulation, so figures can be loaded, removed, or moved without using the mouse-driven dialog. Pairs with [ToypadPicker](#toypadpicker), a standalone controller-driven app for browsing a tag library and sending figures to Cemu.
+A modified Cemu build that adds a local network listener for the LEGO Dimensions Toypad emulation, so figures can be loaded, removed, or moved without using the mouse-driven dialog. Pairs with [ToypadPicker](https://github.com/harrysof/LegoToypad), a standalone controller-driven app for browsing a tag library and sending figures to Cemu.
 
 Cemu's existing Toypad dialog is untouched and still works normally. This is an additional interface, not a replacement.
 
@@ -25,18 +25,15 @@ No authentication, no encryption — it's loopback-only by design.
 
 1. Enable the emulated Dimensions Toypad in Cemu's settings.
 2. Note the listener port (`DimensionsToypadListenerPort`, defaults to `9191`).
-3. Build ToypadPicker (see below) and drop your tag library in a folder named `Lego Dimensions Organized bins` — it's found automatically by walking up from the executable.
+3. Build [ToypadPicker](https://github.com/harrysof/LegoToypad) and drop your tag library in a folder named `Lego Dimensions Organized bins` — it's found automatically by walking up from the executable.
 4. Set the same port in `ToypadPicker.ini`.
 5. Launch Cemu, then ToypadPicker.
 
 ## ToypadPicker
 
-Standalone Win32 app, C++20, XInput + Winsock, no third-party UI libs.
+The companion picker app lives in its own repo: **[harrysof/LegoToypad](https://github.com/harrysof/LegoToypad)**.
 
-```powershell
-cmake -S ToypadPicker -B ToypadPicker/build
-cmake --build ToypadPicker/build --config Release
-```
+It's a standalone Win32 app (C++20, XInput + Winsock, no third-party UI libs) that scans your tag library, lets you pick a figure and slot with a controller, and sends it to this listener.
 
 **Controls**
 
@@ -48,7 +45,7 @@ cmake --build ToypadPicker/build --config Release
 
 Keyboard works too — no controller required.
 
-**Controller handoff:** while ToypadPicker has focus, it signals Cemu (via a named event) to neutralize real controller input so gameplay doesn't react to picker navigation. Released immediately on minimize/close/focus loss. Requires the `Controller.cpp` change in this repo — a stock Cemu build won't honor the signal.
+**Controller handoff:** while ToypadPicker has focus, it signals Cemu (via a named event) to neutralize real controller input so gameplay doesn't react to picker navigation. Released immediately on minimize/close/focus loss. Requires the `Controller.cpp` change in *this* repo — a stock Cemu build won't honor the signal.
 
 **Library:** recursively scans for `.bin` files exactly 180 bytes. Tested against 160 tags across 28 theme folders.
 
@@ -96,6 +93,7 @@ A connection may carry multiple sequential messages; the listener reads exactly 
 | `src/config/CemuConfig.h/.cpp` | `DimensionsToypadListenerPort` load/save |
 | `src/Cafe/CMakeLists.txt` | Adds listener sources to build |
 | `src/gui/wxgui/EmulatedUSBDevices/EmulatedUSBDeviceFrame.cpp` | Unmodified — original dialog still works |
+| `src/input/api/Controller.cpp` | Named-event check for ToypadPicker's controller handoff |
 
 ## Implementation notes
 
