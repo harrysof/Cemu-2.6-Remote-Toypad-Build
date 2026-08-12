@@ -123,8 +123,39 @@ namespace nsyshid
 					continue;
 				}
 
+				// A LOAD message may carry a UTF-8 source file path (2-byte little-endian
+				// length, then that many bytes) for the .bin the figure data came from.
+				// Attaching a real FileStream makes the game's writes persist to that
+				// file, exactly like the built-in toypad window. An empty path keeps the
+				// old in-memory-only behavior.
+				std::string pathUtf8;
+				std::array<uint8, 2> pathLengthBytes{};
+				if (!ReceiveExact(*client, pathLengthBytes))
+				{
+					cemuLog_log(LogType::Force, "Dimensions network listener received a truncated LOAD message");
+					return;
+				}
+				const uint16 pathLength = static_cast<uint16>(pathLengthBytes[0]) | (static_cast<uint16>(pathLengthBytes[1]) << 8);
+				if (pathLength != 0)
+				{
+					pathUtf8.resize(pathLength);
+					if (!ReceiveExact(*client, std::span<uint8>(reinterpret_cast<uint8*>(pathUtf8.data()), pathUtf8.size())))
+					{
+						cemuLog_log(LogType::Force, "Dimensions network listener received a truncated LOAD message");
+						return;
+					}
+				}
+
+				std::unique_ptr<FileStream> dimFile;
+				if (!pathUtf8.empty())
+				{
+					dimFile.reset(FileStream::openFile2(_utf8ToPath(pathUtf8), true));
+					if (!dimFile)
+						cemuLog_log(LogType::Force, "Dimensions network listener failed to open figure file: {}", pathUtf8);
+				}
+
 				g_dimensionstoypad.RemoveFigure(pad, index, true);
-				g_dimensionstoypad.LoadFigure(figureData, nullptr, pad, index);
+				g_dimensionstoypad.LoadFigure(figureData, std::move(dimFile), pad, index);
 				continue;
 			}
 
