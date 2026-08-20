@@ -2,6 +2,9 @@
 
 #include "Dimensions.h"
 
+#include <chrono>
+#include <thread>
+
 namespace nsyshid
 {
 	namespace
@@ -11,6 +14,7 @@ namespace nsyshid
 		constexpr uint8 kMoveCommand = 0x03;
 		constexpr size_t kHeaderSize = 5;
 		constexpr size_t kFigureDataSize = 0x2D * 0x04;
+		constexpr auto kMovePickupDelay = std::chrono::milliseconds(500);
 	}
 
 	DimensionsNetworkListener::~DimensionsNetworkListener()
@@ -181,6 +185,13 @@ namespace nsyshid
 					continue;
 				}
 
+				if (!g_dimensionstoypad.TempRemove(oldIndex))
+				{
+					cemuLog_log(LogType::Force, "Dimensions network listener ignored MOVE from empty source slot {}", oldIndex);
+					continue;
+				}
+
+				std::this_thread::sleep_for(kMovePickupDelay);
 				g_dimensionstoypad.MoveFigure(pad, index, oldPad, oldIndex);
 				continue;
 			}
