@@ -75,6 +75,27 @@ namespace nsyshid
 		uint32 LoadFigure(const std::array<uint8, 0x2D * 0x04>& buf, std::unique_ptr<FileStream> file, uint8 pad, uint8 index);
 		bool CreateFigure(fs::path pathName, uint32 id);
 		bool MoveFigure(uint8 pad, uint8 index, uint8 oldPad, uint8 oldIndex);
+
+		// Per-pad-region LED state, mirrored out via the network listener so an
+		// external controller app can render the pads glowing like the real
+		// toypad during keystone puzzles. `mode` matches the app's encoding:
+		// 0 = off, 1 = solid, 2 = flash, 3 = fade. `pad` is the wire pad value
+		// (1 = center, 2 = left, 3 = right).
+		struct LedPadState
+		{
+			uint8 pad = 0;
+			uint8 mode = 0;
+			uint8 r = 0, g = 0, b = 0;
+			uint8 onMs = 0, offMs = 0, count = 0, speedMs = 0;
+		};
+
+		// The current LED snapshot (one entry per region, ordered center, left,
+		// right) and the serial that increments whenever any region changes, so
+		// a polling client only re-applies a command once.
+		std::array<LedPadState, 3> GetLedStates();
+		uint8 GetLedSerial();
+		LedPadState GetLedState(uint8 pad);
+
 		static std::map<const uint32, const char*> GetListMinifigs();
 		static std::map<const uint32, const char*> GetListTokens();
 		std::string FindFigure(uint32 figNum);
@@ -84,6 +105,10 @@ namespace nsyshid
 		std::array<DimensionsMini, 7> m_figures{};
 
 	  private:
+		void HandleLedCommand(std::span<const uint8, 32> buf);
+		void SetLedState(uint8 pad, uint8 mode, uint8 r, uint8 g, uint8 b,
+						 uint8 onMs, uint8 offMs, uint8 count, uint8 speedMs);
+
 		void RandomUID(std::array<uint8, 0x2D * 0x04>& uidBuffer);
 		uint8 GenerateChecksum(const std::array<uint8, 32>& data,
 							   int numOfBytes) const;
@@ -106,6 +131,12 @@ namespace nsyshid
 
 		std::queue<std::array<uint8, 32>> m_figureAddedRemovedResponses;
 		std::queue<std::array<uint8, 32>> m_queries;
+
+		// LED mirror state, guarded by m_ledMutex (updated on the HID I/O
+		// thread by SendCommand, read by the network listener's GET_LED handler).
+		std::mutex m_ledMutex;
+		std::array<LedPadState, 3> m_ledState{};
+		uint8 m_ledSerial = 0;
 	};
 	extern DimensionsUSB g_dimensionstoypad;
 

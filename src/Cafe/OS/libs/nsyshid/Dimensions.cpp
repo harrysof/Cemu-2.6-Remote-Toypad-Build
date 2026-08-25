@@ -575,6 +575,9 @@ namespace nsyshid
 		case 0xC7: // Flash All
 		case 0xC8: // Color All
 		{
+			// Mirror the pad-region LED state out to the network listener so an
+			// external app can render the pads glowing like a physical toypad.
+			HandleLedCommand(buf);
 			// Send a blank response to acknowledge color has been sent to toypad
 			q_result = {0x55, 0x01, sequence};
 			q_result[3] = GenerateChecksum(q_result, 3);
@@ -615,6 +618,169 @@ namespace nsyshid
 		}
 
 		m_queries.push(q_result);
+	}
+
+	namespace
+	{
+		// Region index (center/left/right) for a wire pad value: 1 = center, 2 = left, 3 = right.
+		size_t LedPadIndex(uint8 pad)
+		{
+			switch (pad)
+			{
+			case 1: return 0; // center
+			case 2: return 1; // left
+			case 3: return 2; // right
+			}
+			return 0;
+		}
+		// Wire pad value for a region index (the "All" commands enumerate center, left, right).
+		uint8 LedRegionPad(size_t region)
+		{
+			static constexpr std::array<uint8, 3> pads = {1, 2, 3};
+			return pads[region];
+		}
+	} // namespace
+
+	void DimensionsUSB::SetLedState(uint8 pad, uint8 mode, uint8 r, uint8 g, uint8 b,
+									uint8 onMs, uint8 offMs, uint8 count, uint8 speedMs)
+	{
+		std::lock_guard lock(m_ledMutex);
+		auto apply = [&](uint8 targetPad)
+		{
+			LedPadState& state = m_ledState[LedPadIndex(targetPad)];
+			if (state.mode == mode && state.r == r && state.g == g && state.b == b &&
+				state.onMs == onMs && state.offMs == offMs && state.count == count && state.speedMs == speedMs)
+				return; // no change - do not disturb the poll serial
+			state.pad = targetPad;
+			state.mode = mode;
+			state.r = r;
+			state.g = g;
+			state.b = b;
+			state.onMs = onMs;
+			state.offMs = offMs;
+			state.count = count;
+			state.speedMs = speedMs;
+			++m_ledSerial;
+			cemuLog_log(LogType::Force, "Toypad LED set: pad {} mode {} rgb {},{},{} (serial {})",
+				state.pad, state.mode, state.r, state.g, state.b, m_ledSerial);
+		};
+
+		if (pad == 0) // all pads
+		{
+			apply(1);
+			apply(2);
+			apply(3);
+		}
+		else
+		{
+			apply(pad);
+		}
+	}
+
+	DimensionsUSB::LedPadState DimensionsUSB::GetLedState(uint8 pad)
+	{
+		std::lock_guard lock(m_ledMutex);
+		return m_ledState[LedPadIndex(pad)];
+	}
+
+	std::array<DimensionsUSB::LedPadState, 3> DimensionsUSB::GetLedStates()
+	{
+		std::lock_guard lock(m_ledMutex);
+		return m_ledState;
+	}
+
+	uint8 DimensionsUSB::GetLedSerial()
+	{
+		std::lock_guard lock(m_ledMutex);
+		return m_ledSerial;
+	}
+
+	// Parses the game's HID LED commands (0xC0..0xC8) and mirrors the resulting
+	// per-region state into m_ledState. Payload layout follows the
+	// reverse-engineered Dimensions protocol: headers are {0x55, len, command,
+	// messageId, ...}, so args begin at buf[4]. Padding: "All" commands
+	// enumerate center, left, right, each with a leading on/off byte.
+	void DimensionsUSB::HandleLedCommand(std::span<const uint8, 32> buf)
+	{
+		const uint8 command = buf[2];
+		// Always-on diagnostic (LogType::Force goes straight to log.txt): confirm
+		// the game's LED commands actually reach SendCommand in the emulator.
+		cemuLog_log(LogType::Force, "Toypad LED command 0x{:02x} seq {} bytes {:02x} {:02x} {:02x} {:02x} {:02x} {:02x}",
+			command, buf[3], buf[4], buf[5], buf[6], buf[7], buf[8], buf[9]);
+		switch (command)
+		{
+		case 0xC0: // Color: pad, r, g, b
+		{
+			SetLedState(buf[4], 1, buf[5], buf[6], buf[7], 0, 0, 0, 0);
+			break;
+		}
+		case 0xC1: // Get Pad Color - query only, no state change
+		{
+			break;
+		}
+		case 0xC2: // Fade: pad, tickTime, tickCount, r, g, b
+		{
+			SetLedState(buf[4], 3, buf[7], buf[8], buf[9], 0, 0, buf[6], buf[5]);
+			break;
+		}
+		case 0xC3: // Flash: pad, on, off, count(0xFF=forever), r, g, b
+		{
+			const uint8 count = (buf[7] == 0xFF) ? 0 : buf[7];
+			SetLedState(buf[4], 2, buf[8], buf[9], buf[10], buf[5], buf[6], count, 0);
+			break;
+		}
+		case 0xC4: // Fade Random: pad, tickTime, tickCount (colour left as-is)
+		{
+			const LedPadState existing = GetLedState(buf[4]);
+			SetLedState(buf[4], 3, existing.r, existing.g, existing.b, 0, 0, buf[6], buf[5]);
+			break;
+		}
+		case 0xC6: // Fade All: per-region on/off, tickTime, tickCount, r, g, b
+		{
+			for (size_t region = 0; region < 3; ++region)
+			{
+				const size_t off = 4 + region * 6;
+				if (buf[off] == 0)
+				{
+					SetLedState(LedRegionPad(region), 0, 0, 0, 0, 0, 0, 0, 0);
+					continue;
+				}
+				SetLedState(LedRegionPad(region), 3, buf[off + 3], buf[off + 4], buf[off + 5], 0, 0, buf[off + 2], buf[off + 1]);
+			}
+			break;
+		}
+		case 0xC7: // Flash All: per-region on/off, on, off, count, r, g, b
+		{
+			for (size_t region = 0; region < 3; ++region)
+			{
+				const size_t off = 4 + region * 7;
+				if (buf[off] == 0)
+				{
+					SetLedState(LedRegionPad(region), 0, 0, 0, 0, 0, 0, 0, 0);
+					continue;
+				}
+				const uint8 count = (buf[off + 3] == 0xFF) ? 0 : buf[off + 3];
+				SetLedState(LedRegionPad(region), 2, buf[off + 4], buf[off + 5], buf[off + 6], buf[off + 1], buf[off + 2], count, 0);
+			}
+			break;
+		}
+		case 0xC8: // Color All: per-region on/off, r, g, b
+		{
+			for (size_t region = 0; region < 3; ++region)
+			{
+				const size_t off = 4 + region * 4;
+				if (buf[off] == 0)
+				{
+					SetLedState(LedRegionPad(region), 0, 0, 0, 0, 0, 0, 0, 0);
+					continue;
+				}
+				SetLedState(LedRegionPad(region), 1, buf[off + 1], buf[off + 2], buf[off + 3], 0, 0, 0, 0);
+			}
+			break;
+		}
+		default:
+			break;
+		}
 	}
 
 	uint32 DimensionsUSB::LoadFigure(const std::array<uint8, 0x2D * 0x04>& buf, std::unique_ptr<FileStream> file, uint8 pad, uint8 index)

@@ -12,9 +12,14 @@ namespace nsyshid
 		constexpr uint8 kLoadCommand = 0x01;
 		constexpr uint8 kRemoveCommand = 0x02;
 		constexpr uint8 kMoveCommand = 0x03;
+		constexpr uint8 kGetLedCommand = 0x04;
 		constexpr size_t kHeaderSize = 5;
 		constexpr size_t kFigureDataSize = 0x2D * 0x04;
 		constexpr auto kMovePickupDelay = std::chrono::milliseconds(500);
+		// The GET_LED response is a fixed-length snapshot: { 'L', serial, 3,
+		// then 3 regions x 9 bytes (pad, mode, r, g, b, onMs, offMs, count,
+		// speedMs) } = 30 bytes.
+		constexpr size_t kLedResponseSize = 3 + 3 * 9;
 	}
 
 	DimensionsNetworkListener::~DimensionsNetworkListener()
@@ -193,6 +198,39 @@ namespace nsyshid
 
 				std::this_thread::sleep_for(kMovePickupDelay);
 				g_dimensionstoypad.MoveFigure(pad, index, oldPad, oldIndex);
+				continue;
+			}
+
+			if (command == kGetLedCommand)
+			{
+				// Provide the current LED snapshot so a polling client (e.g. the
+				// LegoToypad controller app) can render the pads glowing without
+				// any push. The serial tells the client when a command changed.
+				const auto states = g_dimensionstoypad.GetLedStates();
+				const uint8 serial = g_dimensionstoypad.GetLedSerial();
+
+				std::array<uint8, kLedResponseSize> response{};
+				response[0] = 0x4C; // 'L' magic
+				response[1] = serial;
+				response[2] = 0x03; // region count
+				for (size_t i = 0; i < 3; ++i)
+				{
+					const size_t off = 3 + i * 9;
+					response[off + 0] = states[i].pad;
+					response[off + 1] = states[i].mode;
+					response[off + 2] = states[i].r;
+					response[off + 3] = states[i].g;
+					response[off + 4] = states[i].b;
+					response[off + 5] = states[i].onMs;
+					response[off + 6] = states[i].offMs;
+					response[off + 7] = states[i].count;
+					response[off + 8] = states[i].speedMs;
+				}
+
+				boost::system::error_code writeError;
+				boost::asio::write(*client, boost::asio::buffer(response.data(), response.size()), writeError);
+				if (writeError && m_running)
+					cemuLog_log(LogType::Force, "Dimensions network listener failed to send LED state: {}", writeError.message());
 				continue;
 			}
 

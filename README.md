@@ -1,6 +1,6 @@
 # Cemu 2.6 Remote Toypad Build
 
-A modified Cemu build that adds a local network listener for the LEGO Dimensions Toypad emulation, so figures can be loaded, removed, or moved without using the mouse-driven dialog. Pairs with [LegoToypad](https://github.com/harrysof/LegoToypad), a standalone controller-driven app for browsing a tag library and sending figures to Cemu.
+A modified Cemu build that adds a local network listener for the LEGO Dimensions Toypad emulation, so figures can be loaded, removed, or moved without using the mouse-driven dialog — and so an external app can read back the Toypad's LED state and render the pads glowing like the real hardware. Pairs with [LegoToypad](https://github.com/harrysof/LegoToypad), a standalone controller-driven app for browsing a tag library and sending figures to Cemu.
 
 Cemu's existing Toypad dialog is untouched and still works normally. This is an additional interface, not a replacement.
 
@@ -18,6 +18,7 @@ LegoToypad  --TCP (127.0.0.1)-->  Cemu listener  -->  g_dimensionstoypad
 - Cemu opens a TCP listener on `127.0.0.1` only, once the emulated Toypad is attached.
 - LegoToypad scans a tag library, lets you pick a figure and slot with a controller, and sends it over the socket.
 - Cemu decodes the message and calls the same `LoadFigure` / `RemoveFigure` / `MoveFigure` methods the GUI dialog already uses.
+- The emulated Toypad also mirrors the game's own LED commands, and the listener hands that state back on request, so the client can light its pads in step with the game.
 
 No authentication, no encryption — it's loopback-only by design.
 
@@ -55,7 +56,7 @@ Every message starts with a 5-byte header:
 
 | Offset | Field | Value |
 |---|---|---|
-| 0 | Command | `0x01` LOAD, `0x02` REMOVE, `0x03` MOVE |
+| 0 | Command | `0x01` LOAD, `0x02` REMOVE, `0x03` MOVE, `0x04` GET_LED |
 | 1 | Dest pad | 1–3 |
 | 2 | Dest slot | 0–6 |
 | 3 | Old pad (MOVE only) | 0 for LOAD/REMOVE |
@@ -66,10 +67,37 @@ Every message starts with a 5-byte header:
 | LOAD `0x01` | 185 bytes (header + 180 raw tag bytes) | `RemoveFigure(pad, index, true)` then `LoadFigure(tag_data, nullptr, pad, index)` |
 | REMOVE `0x02` | 5 bytes | `RemoveFigure(pad, index, true)` |
 | MOVE `0x03` | 5 bytes | `MoveFigure(pad, index, old_pad, old_index)` |
+| GET_LED `0x04` | 5 bytes in, 30 bytes back | Replies with the current LED snapshot; header bytes 1–4 are ignored |
 
 All fields are single bytes — no endianness concerns in v1.
 
 A connection may carry multiple sequential messages; the listener reads exactly the byte count each command requires. Invalid pad/slot/reserved values or unknown commands are logged and the message is dropped, but unknown commands or truncated data close the connection, since the next message boundary can no longer be determined.
+
+### LED mirror (`GET_LED`)
+
+LOAD/REMOVE/MOVE are fire-and-forget; `GET_LED` is the one command that answers. It returns a fixed 30-byte snapshot of what the game has the three LED regions doing:
+
+```
+[0]   0x4C  'L' magic
+[1]   serial       increments whenever any region actually changes
+[2]   0x03         region count
+[3..] 3 x 9 bytes: pad, mode, r, g, b, onMs, offMs, count, speedMs
+```
+
+| Field | Meaning |
+|---|---|
+| `pad` | Wire pad value — `1` centre, `2` left, `3` right |
+| `mode` | `0` off, `1` solid, `2` flash, `3` fade |
+| `r`, `g`, `b` | The colour the game set, verbatim |
+| `onMs` / `offMs` | Flash on and off durations, in Toypad ticks |
+| `count` | Cycle count; `0` means "until the next command" (`0xFF` on the wire is normalized to `0`) |
+| `speedMs` | Fade tick time |
+
+The emulated Toypad builds this snapshot by parsing the game's own HID LED commands — `0xC0` Color, `0xC2` Fade, `0xC3` Flash, `0xC4` Fade Random, and the `0xC6`/`0xC7`/`0xC8` "All" variants, which carry a per-region on/off byte. A `pad` of `0` ("all pads") fans out to all three regions. `0xC1` (Get Pad Color) is a query and changes nothing.
+
+The **serial** only advances when a command actually changes a region's state — re-sending an identical command leaves it alone. A polling client can therefore skip snapshots it has already applied and never restart a flash mid-cycle.
+
+LED state is guarded by its own `m_ledMutex`: written on the HID I/O thread from `SendCommand`, read by the listener's `GET_LED` handler. LED commands and state changes are logged to `log.txt` (`Toypad LED command 0x..` / `Toypad LED set: ...`).
 
 **Toypad slot → pad mapping** (as used by LegoToypad):
 
@@ -89,6 +117,7 @@ A connection may carry multiple sequential messages; the listener reads exactly 
 | Path | Purpose |
 |---|---|
 | `src/Cafe/OS/libs/nsyshid/DimensionsNetworkListener.h/.cpp` | Listener thread, TCP framing, validation |
+| `src/Cafe/OS/libs/nsyshid/Dimensions.h/.cpp` | LED command parsing (`HandleLedCommand`) and the mirrored per-region state |
 | `src/Cafe/OS/libs/nsyshid/BackendEmulated.cpp/.h` | Starts listener after Toypad attach, stops on teardown |
 | `src/config/CemuConfig.h/.cpp` | `DimensionsToypadListenerPort` load/save |
 | `src/Cafe/CMakeLists.txt` | Adds listener sources to build |
@@ -100,6 +129,7 @@ A connection may carry multiple sequential messages; the listener reads exactly 
 - Listener starts only after the emulated Toypad attaches, so it's gated by `EmulateDimensionsToypad` and inactive if a physical Toypad has priority.
 - `LoadFigure`/`RemoveFigure` take `m_dimensionsMutex` internally; `MoveFigure` is the existing composition of both. The listener calls these directly and shares the GUI's threading model — no new locking was introduced.
 - `DimensionsMini::Save()` still no-ops on a null `FileStream`, so network-loaded figures stay in memory only, matching existing GUI behavior.
+- LED mirroring is read-only and passive: `HandleLedCommand` runs off the existing `0xC0`–`0xC8` acknowledgement path and changes nothing about the response the game receives. A client that never sends `GET_LED` sees no difference at all.
 - No divergence from `TOYPAD_TECHNICAL.md` found at any integration point.
 
 ## Known limitations / not yet verified
