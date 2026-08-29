@@ -16,10 +16,15 @@ namespace nsyshid
 		constexpr size_t kHeaderSize = 5;
 		constexpr size_t kFigureDataSize = 0x2D * 0x04;
 		constexpr auto kMovePickupDelay = std::chrono::milliseconds(500);
-		// The GET_LED response is a fixed-length snapshot: { 'L', serial, 3,
-		// then 3 regions x 9 bytes (pad, mode, r, g, b, onMs, offMs, count,
-		// speedMs) } = 30 bytes.
-		constexpr size_t kLedResponseSize = 3 + 3 * 9;
+		// The GET_LED response is a fixed-length snapshot: { 'L', serial,
+		// format version, region count, then 3 regions x 12 bytes (pad, mode,
+		// r, g, b, fromR, fromG, fromB, onMs, offMs, count, speedMs) } = 40
+		// bytes. Version 2 added fromR/G/B (the pre-fade colour) so a client
+		// can render the real toypad's two-colour cross-fade instead of a
+		// single-hue brightness ramp; the version byte lets a stale client
+		// notice the mismatch instead of misreading the buffer.
+		constexpr uint8 kLedProtocolVersion = 2;
+		constexpr size_t kLedResponseSize = 4 + 3 * 12;
 	}
 
 	DimensionsNetworkListener::~DimensionsNetworkListener()
@@ -212,19 +217,23 @@ namespace nsyshid
 				std::array<uint8, kLedResponseSize> response{};
 				response[0] = 0x4C; // 'L' magic
 				response[1] = serial;
-				response[2] = 0x03; // region count
+				response[2] = kLedProtocolVersion;
+				response[3] = 0x03; // region count
 				for (size_t i = 0; i < 3; ++i)
 				{
-					const size_t off = 3 + i * 9;
+					const size_t off = 4 + i * 12;
 					response[off + 0] = states[i].pad;
 					response[off + 1] = states[i].mode;
 					response[off + 2] = states[i].r;
 					response[off + 3] = states[i].g;
 					response[off + 4] = states[i].b;
-					response[off + 5] = states[i].onMs;
-					response[off + 6] = states[i].offMs;
-					response[off + 7] = states[i].count;
-					response[off + 8] = states[i].speedMs;
+					response[off + 5] = states[i].fromR;
+					response[off + 6] = states[i].fromG;
+					response[off + 7] = states[i].fromB;
+					response[off + 8] = states[i].onMs;
+					response[off + 9] = states[i].offMs;
+					response[off + 10] = states[i].count;
+					response[off + 11] = states[i].speedMs;
 				}
 
 				boost::system::error_code writeError;

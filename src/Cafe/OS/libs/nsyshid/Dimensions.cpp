@@ -641,6 +641,18 @@ namespace nsyshid
 		}
 	} // namespace
 
+	uint8 DimensionsUSB::NextRandomByte()
+	{
+		// Independent of the NFC challenge/response RNG (m_randomA..D) so LED
+		// fade-random colours never perturb that sequence. Guarded by its own
+		// mutex rather than m_ledMutex: callers invoke this while building
+		// SetLedState's arguments, i.e. before that lock is taken.
+		static std::mutex ledRngMutex;
+		static std::mt19937 ledRng{std::random_device{}()};
+		std::lock_guard lock(ledRngMutex);
+		return static_cast<uint8>(ledRng() & 0xFF);
+	}
+
 	void DimensionsUSB::SetLedState(uint8 pad, uint8 mode, uint8 r, uint8 g, uint8 b,
 									uint8 onMs, uint8 offMs, uint8 count, uint8 speedMs)
 	{
@@ -648,6 +660,10 @@ namespace nsyshid
 		auto apply = [&](uint8 targetPad)
 		{
 			LedPadState& state = m_ledState[LedPadIndex(targetPad)];
+			// A fade's "from" colour is whatever the pad was already showing
+			// (or already fading towards) the moment this command lands, so a
+			// fade issued mid-fade still anchors to something on-screen.
+			const uint8 fromR = state.r, fromG = state.g, fromB = state.b;
 			if (state.mode == mode && state.r == r && state.g == g && state.b == b &&
 				state.onMs == onMs && state.offMs == offMs && state.count == count && state.speedMs == speedMs)
 				return; // no change - do not disturb the poll serial
@@ -656,13 +672,19 @@ namespace nsyshid
 			state.r = r;
 			state.g = g;
 			state.b = b;
+			if (mode == 3) // Fade: remember the pre-command colour to cross-fade from
+			{
+				state.fromR = fromR;
+				state.fromG = fromG;
+				state.fromB = fromB;
+			}
 			state.onMs = onMs;
 			state.offMs = offMs;
 			state.count = count;
 			state.speedMs = speedMs;
 			++m_ledSerial;
-			cemuLog_log(LogType::Force, "Toypad LED set: pad {} mode {} rgb {},{},{} (serial {})",
-				state.pad, state.mode, state.r, state.g, state.b, m_ledSerial);
+			cemuLog_log(LogType::Force, "Toypad LED set: pad {} mode {} rgb {},{},{} from {},{},{} (serial {})",
+				state.pad, state.mode, state.r, state.g, state.b, state.fromR, state.fromG, state.fromB, m_ledSerial);
 		};
 
 		if (pad == 0) // all pads
@@ -729,10 +751,24 @@ namespace nsyshid
 			SetLedState(buf[4], 2, buf[8], buf[9], buf[10], buf[5], buf[6], count, 0);
 			break;
 		}
-		case 0xC4: // Fade Random: pad, tickTime, tickCount (colour left as-is)
+		case 0xC4: // Fade Random: pad, tickTime, tickCount
 		{
-			const LedPadState existing = GetLedState(buf[4]);
-			SetLedState(buf[4], 3, existing.r, existing.g, existing.b, 0, 0, buf[6], buf[5]);
+			// The real portal's firmware picks its own random target; the
+			// specific hue can't be reproduced, but a genuine second colour
+			// (rather than silently reusing the current one) is what makes
+			// this actually cross-fade instead of sitting still. pad 0 means
+			// every pad, and the hardware rolls for each one separately, so
+			// expand it here rather than letting SetLedState broadcast a
+			// single shared colour to all three.
+			if (buf[4] == 0)
+			{
+				for (uint8 targetPad = 1; targetPad <= 3; ++targetPad)
+					SetLedState(targetPad, 3, NextRandomByte(), NextRandomByte(), NextRandomByte(), 0, 0, buf[6], buf[5]);
+			}
+			else
+			{
+				SetLedState(buf[4], 3, NextRandomByte(), NextRandomByte(), NextRandomByte(), 0, 0, buf[6], buf[5]);
+			}
 			break;
 		}
 		case 0xC6: // Fade All: per-region on/off, tickTime, tickCount, r, g, b

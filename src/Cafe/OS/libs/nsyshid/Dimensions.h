@@ -81,11 +81,18 @@ namespace nsyshid
 		// toypad during keystone puzzles. `mode` matches the app's encoding:
 		// 0 = off, 1 = solid, 2 = flash, 3 = fade. `pad` is the wire pad value
 		// (1 = center, 2 = left, 3 = right).
+		// `fromR/G/B` is the color the pad was already showing when a fade
+		// command was issued: the real toypad fades by alternating between
+		// that color and the new r/g/b target (odd tick counts land on the
+		// new color, even counts return to the old one), not by ramping one
+		// color's brightness. Kept alongside r/g/b so a renderer can
+		// reproduce the actual two-color cross-fade.
 		struct LedPadState
 		{
 			uint8 pad = 0;
 			uint8 mode = 0;
 			uint8 r = 0, g = 0, b = 0;
+			uint8 fromR = 0, fromG = 0, fromB = 0;
 			uint8 onMs = 0, offMs = 0, count = 0, speedMs = 0;
 		};
 
@@ -108,6 +115,7 @@ namespace nsyshid
 		void HandleLedCommand(std::span<const uint8, 32> buf);
 		void SetLedState(uint8 pad, uint8 mode, uint8 r, uint8 g, uint8 b,
 						 uint8 onMs, uint8 offMs, uint8 count, uint8 speedMs);
+		uint8 NextRandomByte();
 
 		void RandomUID(std::array<uint8, 0x2D * 0x04>& uidBuffer);
 		uint8 GenerateChecksum(const std::array<uint8, 32>& data,
