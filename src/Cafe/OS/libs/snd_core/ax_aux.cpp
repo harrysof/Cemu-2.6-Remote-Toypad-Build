@@ -91,6 +91,24 @@ namespace snd_core
 		return nullptr;
 	}
 
+	// Experimental LEGO Dimensions compatibility path: return raw AUX input even without a callback.
+	sint32be* AXAux_GetRawInputBuffer(sint32 device, sint32 deviceIndex, sint32 auxBus)
+	{
+		if (auxBus < 0 || auxBus >= AX_AUX_BUS_COUNT)
+			return nullptr;
+		if (device == AX_DEV_TV)
+		{
+			cemu_assert_debug(deviceIndex == 0);
+			return __AXAuxTVBuffer->GetBuffer(auxBus, __AXCurrentAuxInputFrameIndex);
+		}
+		else if (device == AX_DEV_DRC)
+		{
+			cemu_assert_debug(deviceIndex >= 0 && deviceIndex <= 1);
+			return __AXAuxDRCBuffer[deviceIndex].GetBuffer(auxBus, __AXCurrentAuxInputFrameIndex);
+		}
+		return nullptr;
+	}
+
 	sint32be* AXAux_GetOutputBuffer(sint32 device, sint32 deviceIndex, sint32 auxBus)
 	{
 		uint32 outputFrameIndex = AXAux_GetOutputFrameIndex();

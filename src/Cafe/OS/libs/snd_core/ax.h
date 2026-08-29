@@ -303,6 +303,7 @@ namespace snd_core
 	void AXAux_Process();
 	
 	sint32be* AXAux_GetInputBuffer(sint32 device, sint32 deviceIndex, sint32 auxBus);
+	sint32be* AXAux_GetRawInputBuffer(sint32 device, sint32 deviceIndex, sint32 auxBus);
 	sint32be* AXAux_GetOutputBuffer(sint32 device, sint32 deviceIndex, sint32 auxBus);
 
 	sint32 AXGetAuxCallback(sint32 device, sint32 deviceIndex, uint32 auxBusIndex, MEMPTR<uint32be> funcPtrOut, MEMPTR<uint32be> contextPtrOut);

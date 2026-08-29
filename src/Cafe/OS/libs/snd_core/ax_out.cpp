@@ -1,3 +1,5 @@
+#include <cstdlib>
+#include <cstring>
 #include "Cafe/OS/libs/snd_core/ax.h"
 #include "Cafe/OS/libs/snd_core/ax_internal.h"
 #include "Cafe/HW/MMU/MMU.h"
@@ -267,17 +269,40 @@ namespace snd_core
 		}
 		else if (__AXMode[AX_DEV_TV] == AX_MODE_STEREO)
 		{
-			sint32* inputChannel0 = __AXTVBuffer48.GetPtr() + numSamples * 0;
-			sint32* inputChannel1 = __AXTVBuffer48.GetPtr() + numSamples * 1;
+			sint32* ch0 = __AXTVBuffer48.GetPtr() + numSamples * 0;  // L
+			sint32* ch1 = __AXTVBuffer48.GetPtr() + numSamples * 1;  // R
+			sint32* ch2 = __AXTVBuffer48.GetPtr() + numSamples * 2;  // SL
+			sint32* ch3 = __AXTVBuffer48.GetPtr() + numSamples * 3;  // SR
+			sint32* ch4 = __AXTVBuffer48.GetPtr() + numSamples * 4;  // FC
 			sint16* dmaOutputBuffer = __AXTVDMABuffers[frameIndex];
+			static const bool centerOnlyDiag = []()
+			{
+				const char* diag = std::getenv("CEMU_LEGO_TV_FC_DIAG");
+				return diag && std::strcmp(diag, "1") == 0;
+			}();
 			for (sint32 i = 0; i < numSamples; i++)
 			{
-				dmaOutputBuffer[0] = _swapEndianS16((sint16)std::min(std::max(_swapEndianS32(*inputChannel0), -32768), 32767));
-				dmaOutputBuffer[1] = _swapEndianS16((sint16)std::min(std::max(_swapEndianS32(*inputChannel1), -32768), 32767));
+				sint64 c = (sint64)_swapEndianS32(*ch4);
+				sint64 l;
+				sint64 r;
+				if (centerOnlyDiag)
+				{
+					l = c;
+					r = c;
+				}
+				else
+				{
+					// Equal-power (-3 dB) fold-down of center and matching surround.
+					sint64 cFold = (c * 181) >> 8;
+					sint64 slFold = ((sint64)_swapEndianS32(*ch2) * 181) >> 8;
+					sint64 srFold = ((sint64)_swapEndianS32(*ch3) * 181) >> 8;
+					l = (sint64)_swapEndianS32(*ch0) + cFold + slFold;
+					r = (sint64)_swapEndianS32(*ch1) + cFold + srFold;
+				}
+				dmaOutputBuffer[0] = _swapEndianS16((sint16)std::min<sint64>(std::max<sint64>(l, -32768), 32767));
+				dmaOutputBuffer[1] = _swapEndianS16((sint16)std::min<sint64>(std::max<sint64>(r, -32768), 32767));
 				dmaOutputBuffer += 2;
-				// next sample
-				inputChannel0++;
-				inputChannel1++;
+				ch0++; ch1++; ch2++; ch3++; ch4++;
 			}
 			AIInitDMA(__AXTVDMABuffers[frameIndex], numSamples * 2 * sizeof(sint16)); // 2ch output
 		}

@@ -1119,8 +1119,13 @@ namespace snd
 
 		void AXFXReverbHiCallback(AUXCBSAMPLEDATA* auxSamples, AXFXReverbHiData* reverbHi)
 		{
-			// todo - implement me
-			__UnimplementedFXCallback(auxSamples, 96, true, true, true, false, false, false);
+			// todo - implement me. Until then, leave the aux buffer as-is (dry
+			// passthrough) instead of zeroing it: this callback runs in-place on
+			// the aux bus's pre-effect input, so silencing it here deletes that
+			// whole share of every voice's signal from the final mix (Cemu issue
+			// #1303 / LEGO_AUDIO_BUG_SOURCE_ANALYSIS.md). A dry passthrough is
+			// tonally wrong (no actual reverb) but restores the correct level.
+			PrintUnsupportedSoundEffectWarning();
 		}
 
 		/* AXFXMultiChReverb */
@@ -1148,8 +1153,9 @@ namespace snd
 
 		void AXFXMultiChReverbCallback(AUXCBSAMPLEDATA* auxSamples, AXFXMultiChReverbData* reverbHi, AXAUXCBCHANNELINFO* auxInfo)
 		{
-			// todo - implement me
-			__UnimplementedFXCallback(auxSamples, auxInfo->numSamples, true, true, true, true, true, true);
+			// todo - implement me. See AXFXReverbHiCallback above: dry passthrough
+			// instead of zeroing, so the aux send isn't deleted from the mix.
+			PrintUnsupportedSoundEffectWarning();
 		}
 
 		/* AXFXReverbStd */
@@ -1176,8 +1182,9 @@ namespace snd
 
 		void AXFXReverbStdExpCallback(AUXCBSAMPLEDATA* auxSamples, AXFXReverbStdData* reverbData)
 		{
-			// todo - implement me
-			__UnimplementedFXCallback(auxSamples, 96, true, true, true, false, false, false);
+			// todo - implement me. See AXFXReverbHiCallback above: dry passthrough
+			// instead of zeroing, so the aux send isn't deleted from the mix.
+			PrintUnsupportedSoundEffectWarning();
 		}
 
 		void Initialize()

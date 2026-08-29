@@ -1,3 +1,6 @@
+#include <cstdlib>
+#include <cstring>
+#include <algorithm>
 #include "Cafe/OS/libs/snd_core/ax.h"
 #include "Cafe/OS/libs/snd_core/ax_internal.h"
 #include "Cafe/HW/MMU/MMU.h"
@@ -753,13 +756,15 @@ namespace snd_core
 			return;
 		float a0 = (float)_swapEndianS16(internalShadowCopy->lpf.a0) / 32767.0f;
 		float b0 = (float)_swapEndianS16(internalShadowCopy->lpf.b0) / 32767.0f;
-		float prevSample = (float)_swapEndianS16((sint16)internalShadowCopy->lpf.yn1) * 256.0f / 32767.0f;
+		float prevSample = (float)_swapEndianS16((sint16)internalShadowCopy->lpf.yn1) * 256.0f;
 		for (sint32 i = 0; i < sampleCount; i++)
 		{
-			sampleData[i] = a0 * sampleData[i] - b0 * prevSample;
+			sampleData[i] = a0 * sampleData[i] + b0 * prevSample;
 			prevSample = sampleData[i];
 		}
-		internalShadowCopy->lpf.yn1 = (uint16)_swapEndianS16((sint16)(prevSample / 256.0f * 32767.0f));
+		float yn1f = prevSample / 256.0f;
+		yn1f = std::min(std::max(yn1f, -32768.0f), 32767.0f);
+		internalShadowCopy->lpf.yn1 = (uint16)_swapEndianS16((sint16)yn1f);
 	}
 
 	// mix audio generated from voice into main bus and aux buses
@@ -909,7 +914,20 @@ namespace snd_core
 		{
 			sint32be* auxOutput = AXAux_GetOutputBuffer(AX_DEV_TV, 0, auxBus);
 			if (auxOutput == nullptr)
+			{
+				const char* fallback = std::getenv("CEMU_LEGO_AUDIO_AUX_FALLBACK");
+				if (fallback && std::strcmp(fallback, "1") == 0)
+				{
+					sint32be* auxInput = AXAux_GetRawInputBuffer(AX_DEV_TV, 0, auxBus);
+					if (auxInput != nullptr)
+					{
+						uint16 auxReturnVolume = __AXTVAuxReturnVolume[auxBus];
+						sint16 auxReturnDelta = 0;
+						AXAuxMix_MixProcessedAuxSamplesIntoOutput(auxInput, __AXMixBufferTV, sampleCount * AX_TV_CHANNEL_COUNT, &auxReturnVolume, auxReturnDelta);
+					}
+				}
 				continue;
+			}
 			// AUX return from output buffer
 			uint16 auxReturnVolume = __AXTVAuxReturnVolume[auxBus];
 			sint16 auxReturnDelta = 0;
