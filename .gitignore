@@ -54,3 +54,5 @@ bin/graphicPacks/*
 
 # Ignore Finder view option files created by OS X
 .DS_Store
+*.log
+/dependencies
